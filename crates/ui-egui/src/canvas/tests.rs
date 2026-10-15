@@ -2261,7 +2261,7 @@ fn right_click_on_a_shape_opens_the_format_shape_pane() {
 }
 
 /// #1197: the context menu on a table of contents entry offers Update Field, as in Word, and
-/// it brings the table up to date.
+/// it brings the table up to date through the Update Table of Contents dialog.
 #[test]
 fn context_menu_on_a_toc_entry_updates_the_table() {
     use egui_kittest::kittest::Queryable;
@@ -2295,6 +2295,13 @@ fn context_menu_on_a_toc_entry_updates_the_table() {
     h.step();
     assert!(h.query_all_by_label_contains("Paste").next().is_some(), "the context menu is open");
     h.get_by_label_contains("Update Field").click();
+    for _ in 0..3 {
+        h.step();
+    }
+    // Update Table of Contents asks first; Update entire table lists the new heading.
+    h.get_by_label("Update entire table").click();
+    h.step();
+    h.get_by_label("OK").click();
     for _ in 0..3 {
         h.step();
     }

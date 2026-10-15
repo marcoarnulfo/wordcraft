@@ -245,6 +245,20 @@ fn convertible_toc_range(s: &Session, r: &wordcraft_doc::FieldRange) -> bool {
         && r.end.path.depth() == 0
 }
 
+/// The body has a table of contents Update Table works on.
+pub fn has_toc(s: &Session) -> bool {
+    toc_range(s).is_some()
+}
+
+/// The selection reaches into the table of contents (its heading or an entry): Update Field
+/// updates the table then, and Word asks how first.
+pub fn toc_selected(s: &Session) -> bool {
+    let Some((start, end)) = toc_range(s) else { return false };
+    let (a, b) = s.sel.ordered();
+    let block = |p: &Pos| (p.story == StoryRef::Body).then(|| p.path.0.first().map_or(0, |i| *i as usize));
+    matches!((block(&a), block(&b)), (Some(a), Some(b)) if a <= end && b >= start)
+}
+
 /// A TOC imported as a range field (`FieldStart`…`FieldEnd`: one without a TOC heading, or with
 /// content around it the engine's TOC can't reproduce) becomes the engine's TOC before an update,
 /// so Update Table refreshes it rather than adding a second one: an empty `TOC` field where the
@@ -431,6 +445,80 @@ fn bookmark_heading(s: &mut Session, path: &Path, lead: usize) -> Result<String,
 pub fn update_toc(s: &mut Session) -> Result<(), CmdError> {
     let tabs = cached_toc_tabs(s);
     regenerate_toc(s, None, &tabs)
+}
+
+/// Update page numbers only (#1197): each entry's page number follows its heading again, and the
+/// entries stay as they are, text edited in the table included; headings added since aren't
+/// listed. An entry finds its heading through the `PAGEREF` field Word writes for the number, its
+/// link, or else its text; one whose heading can't be found keeps its number. A table kept as a
+/// range field (imported with content the engine's TOC can't reproduce) is rebuilt whole.
+pub fn update_toc_pages(s: &mut Session) -> Result<(), CmdError> {
+    let Some((start, end)) = toc_range(s) else { return update_toc(s) };
+    let Some(instr) = s.doc.body.get(start).and_then(|b| b.as_para()).and_then(toc_field) else { return Ok(()) };
+    let f = FieldCode::parse(&instr);
+    let sep = f.arg('p').map(str::to_string).unwrap_or_else(|| "\t".into());
+    let no_pages = f.has('n').then(|| f.arg('n').and_then(level_range).unwrap_or((1, 9)));
+    let l = s.layout();
+    let page_at = |pos: &Pos| l.caret(pos).and_then(|c| l.pages.get(c.page)).map(|pg| pg.number.to_string());
+    let mut marks: std::collections::HashMap<String, Pos> = Default::default();
+    for (name, pos) in s.doc.bookmarks() {
+        marks.entry(name).or_insert(pos);
+    }
+    let mut by_text: Vec<(String, Pos)> =
+        toc_entries(s, &f).into_iter().map(|e| (e.text, Pos { story: StoryRef::Body, path: e.path, off: e.lead })).collect();
+    for i in start + 1..=end {
+        let path = Path::top(i);
+        let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
+        let refs: Vec<(usize, String)> = p
+            .objects
+            .iter()
+            .enumerate()
+            .filter_map(|(k, o)| match o {
+                InlineObject::Field { instr, locked: false, .. } if wordcraft_layout::fields::field_name(instr) == "PAGEREF" => {
+                    Some((k, marks.get(instr.split_whitespace().nth(1)?).and_then(page_at)?))
+                }
+                _ => None,
+            })
+            .collect();
+        if !refs.is_empty() {
+            let para = s.doc.para_mut(StoryRef::Body, &path)?;
+            for (k, page) in refs {
+                if let Some(InlineObject::Field { result, dirty, .. }) = para.objects.get_mut(k) {
+                    *result = page;
+                    *dirty = false;
+                }
+            }
+            para.touch();
+            continue;
+        }
+        // The engine's entries: the number is the text after the last separator, on levels `\n`
+        // leaves with one.
+        let level = p.props.style.as_deref().and_then(|st| st.strip_prefix("TOC")).and_then(|n| n.parse::<u8>().ok()).unwrap_or(1);
+        if no_pages.is_some_and(|(a, b)| (a..=b).contains(&level)) {
+            continue;
+        }
+        let Some(cut) = p.text.rfind(sep.as_str()) else { continue };
+        let at = cut + sep.len();
+        let Some(number) = p.text.get(at..).filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric())).map(str::to_string) else {
+            continue;
+        };
+        let linked = p.props_of_char(0).link.as_deref().and_then(|l| l.strip_prefix('#')).and_then(|n| marks.get(n)).cloned();
+        let label = p.text.get(..cut).unwrap_or("").replace(OBJ, "");
+        let target = linked.or_else(|| {
+            let k = by_text.iter().position(|(t, _)| *t == label)?;
+            Some(by_text.remove(k).1)
+        });
+        let Some(page) = target.as_ref().and_then(page_at).filter(|page| *page != number) else { continue };
+        let props = p.props_of_char(at).clone();
+        let len = p.len();
+        let para = s.doc.para_mut(StoryRef::Body, &path)?;
+        para.delete(at, len)?;
+        para.insert_text(at, &page, &props)?;
+        para.touch();
+    }
+    s.clamp_selection();
+    s.touch();
+    Ok(())
 }
 
 /// Rebuild the entries the TOC field's switches ask for. The tab leader is `leader`, or the one

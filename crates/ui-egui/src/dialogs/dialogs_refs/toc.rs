@@ -1,7 +1,7 @@
 use super::common::{BUILT_IN_LABELS, LEADERS, choice, heading, leader_char, sample};
 use super::index::body_field;
 use super::shell::{Next, go};
-use super::{Dialog, FieldCode, RefsDialog, Serialize, StyleKind, Ui, Value, WordApp, buttons, json, vec2};
+use super::{Dialog, FieldCode, RefsDialog, Serialize, StyleKind, Ui, Value, WordApp, buttons, json, references, vec2};
 
 // ---------------------------------------------------------------------------------------------
 // Table of Contents
@@ -199,6 +199,31 @@ pub(super) fn toc_styles_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TocForm, lev
     }
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok || cancel { go(RefsDialog::Toc(f.clone())) } else { Next::Stay }
+}
+
+/// The Update Table of Contents dialog Word shows before updating a table of contents (#1197):
+/// for Update Table, and for Update Field (F9, the context menu) with the table selected. None
+/// when the command already says what to update (`pageNumbersOnly`, as scripts and the dialog's
+/// OK pass it) or there is no table to ask about.
+pub fn update_toc(app: &WordApp, id: &str, params: &Value) -> Option<RefsDialog> {
+    let asks = match id {
+        "references.updateToc" => references::has_toc(&app.session),
+        "references.updateFields" => references::toc_selected(&app.session),
+        _ => false,
+    };
+    (asks && params.get("pageNumbersOnly").is_none() && crate::widgets::enabled(app, id))
+        .then(|| RefsDialog::UpdateToc { then: id.to_string(), entire: false })
+}
+
+/// Update page numbers only (the default, as in Word) or Update entire table.
+pub(super) fn update_toc_ui(app: &mut WordApp, ui: &mut Ui, then: &str, entire: &mut bool) -> Next {
+    ui.radio_value(entire, false, tl!("Update page numbers only"));
+    ui.radio_value(entire, true, tl!("Update entire table"));
+    let (ok, cancel) = buttons(ui, tl!("OK"));
+    if ok && let Err(e) = app.run(then, json!({"pageNumbersOnly": !*entire})) {
+        app.status(e);
+    }
+    if ok || cancel { Next::Close } else { Next::Stay }
 }
 
 // ---------------------------------------------------------------------------------------------

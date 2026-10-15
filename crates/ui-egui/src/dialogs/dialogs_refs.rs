@@ -10,7 +10,7 @@ use egui::{Sense, Ui, vec2};
 use serde::Serialize;
 use serde_json::{Value, json};
 use wordcraft_doc::{Block, Source, StyleKind};
-use wordcraft_engine::cmd::references::FieldCode;
+use wordcraft_engine::cmd::references::{self, FieldCode};
 
 use crate::WordApp;
 use crate::dialogs::{Dialog, buttons};
@@ -35,7 +35,7 @@ pub use shell::{body, open};
 pub use sources::SourceForm;
 #[cfg(test)]
 use sources::field_mut;
-pub use toc::{FiguresForm, TocForm};
+pub use toc::{FiguresForm, TocForm, update_toc};
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "refs", rename_all = "camelCase")]
@@ -69,6 +69,12 @@ pub enum RefsDialog {
         selected: Option<usize>,
     },
     Source(Box<SourceForm>),
+    /// Update Table of Contents (#1197): page numbers only, or the entire table; OK runs `then`
+    /// (`references.updateToc` or `references.updateFields`) with `pageNumbersOnly`.
+    UpdateToc {
+        then: String,
+        entire: bool,
+    },
 }
 
 impl RefsDialog {
@@ -87,6 +93,7 @@ impl RefsDialog {
             RefsDialog::Sources { .. } => "sourceManager",
             RefsDialog::Source(f) if f.edit => "editSource",
             RefsDialog::Source(_) => "createSource",
+            RefsDialog::UpdateToc { .. } => "updateToc",
         }
     }
 
@@ -106,6 +113,7 @@ impl RefsDialog {
             RefsDialog::Sources { .. } => "Source Manager",
             RefsDialog::Source(f) if f.edit => "Edit Source",
             RefsDialog::Source(_) => "Create Source",
+            RefsDialog::UpdateToc { .. } => "Update Table of Contents",
         }
     }
 }

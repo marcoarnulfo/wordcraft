@@ -1,7 +1,7 @@
 use super::properties::{
     bookmark_text, count_text, date_picture, doc_property, doc_property_arg, new_property_value, set_summary_property, summary_property, text_result,
 };
-use super::toc::{heading_style_level, update_toc};
+use super::toc::{heading_style_level, update_toc, update_toc_pages};
 use super::{
     Block, CharProps, CmdError, CmdResult, FieldCode, InlineObject, NumFormat, Paragraph, Path, Pos, Selection, Session, StoryRef, Value, p,
     sel_result,
@@ -150,12 +150,13 @@ fn has_switch(instr: &str, sw: char) -> bool {
 /// caret is in (the body's fields stay as they are then). SEQ numbering, citations and TOC are
 /// body-only, so they run only when the caret is in the body.
 pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
-    update_fields_in(s, false)
+    update_fields_in(s, false, false)
 }
 
 /// [`update_fields`], or with `all` the whole document: the body (with SEQ, citations and TOC) and
-/// every part story, wherever the caret is (what printing needs).
-pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
+/// every part story, wherever the caret is (what printing needs). With `toc_pages_only` the table
+/// of contents updates only its page numbers (Update page numbers only).
+pub fn update_fields_in(s: &mut Session, all: bool, toc_pages_only: bool) -> Result<(), CmdError> {
     let caret_story = s.sel.focus.story;
     let in_body = all || caret_story == StoryRef::Body;
     if in_body {
@@ -276,7 +277,7 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
         return Ok(());
     }
     crate::cmd::citations::update_citations(s)?;
-    update_toc(s)
+    if toc_pages_only { update_toc_pages(s) } else { update_toc(s) }
 }
 
 /// Refresh every unlocked `DATE` and `TIME` field to now, as Word does whenever it shows,

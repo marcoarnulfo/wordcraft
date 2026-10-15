@@ -44,6 +44,11 @@ impl WordApp {
             self.dialog = dialogs::Dialog::open(name, self);
             return Ok(json!({"pending": name}));
         }
+        // Updating the table of contents asks what to update, as in Word (#1197).
+        if let Some(d) = crate::dialogs_refs::update_toc(self, id, &params) {
+            self.dialog = Some(dialogs::Dialog::Refs(Box::new(d)));
+            return Ok(json!({"pending": "updateToc"}));
+        }
         if (self.session.dirty || self.save_unconfirmed() || refused.is_some())
             && discards_document(id, &params)
             && !self.closes_only_its_window(id, &params)

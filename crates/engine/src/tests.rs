@@ -4274,6 +4274,120 @@ fn toc_page_number_for_heading_above_toc() {
     }
 }
 
+/// A document with a table of contents listing Alpha (page 2) and Bravo (page 3); `hyperlinks`
+/// is the TOC's `\h` switch.
+fn toc_alpha_bravo(hyperlinks: bool) -> Session {
+    let mut s = s();
+    run(&mut s, "references.toc", json!({"hyperlinks": hyperlinks}));
+    run(&mut s, "caret.docEnd", json!({}));
+    for name in ["Alpha", "Bravo"] {
+        run(&mut s, "text.pageBreak", json!({}));
+        run(&mut s, "text.insert", json!({"text": name}));
+        run(&mut s, "para.heading1", json!({}));
+        run(&mut s, "text.newParagraph", json!({}));
+    }
+    run(&mut s, "references.updateToc", json!({}));
+    let t = text(&s);
+    assert!(t.contains("Alpha\t2") && t.contains("Bravo\t3"), "{t:?}");
+    s
+}
+
+/// A page break before the `n`th Heading 1 pushes it (and what follows) a page down.
+fn break_before_heading(s: &mut Session, n: usize) {
+    let at = s
+        .doc
+        .body
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| b.as_para().is_some_and(|p| p.props.style.as_deref() == Some("Heading1")))
+        .nth(n)
+        .map(|(i, _)| i)
+        .unwrap();
+    let br = wordcraft_doc::Paragraph::with_text("\u{000C}", wordcraft_doc::props::CharProps::default());
+    s.doc.insert_block(StoryRef::Body, &wordcraft_doc::Path::top(at), wordcraft_doc::Block::Para(br)).unwrap();
+    s.touch();
+}
+
+/// The table's Alpha entry edited by hand, Bravo pushed to page 4, a Charlie heading added.
+fn edit_after_toc(s: &mut Session) {
+    run(s, "select.text", json!({"text": "Alpha"}));
+    run(s, "text.insert", json!({"text": "Alpha, revised"}));
+    break_before_heading(s, 1);
+    run(s, "caret.docEnd", json!({}));
+    run(s, "text.insert", json!({"text": "Charlie"}));
+    run(s, "para.heading1", json!({}));
+}
+
+/// #1197: Update Table › Update page numbers only, as in Word: each entry's number follows its
+/// heading's page, and the entries stay as they are (text edited in the table is kept, a heading
+/// added since isn't listed). One undo step puts the old numbers back.
+#[test]
+fn toc_update_page_numbers_only_keeps_the_entries() {
+    let mut s = toc_alpha_bravo(true);
+    edit_after_toc(&mut s);
+    // Alpha moves a page down too: its edited entry still finds it through its link.
+    break_before_heading(&mut s, 0);
+    run(&mut s, "references.updateToc", json!({"pageNumbersOnly": true}));
+    let t = text(&s);
+    assert!(t.contains("Alpha, revised\t3") && t.contains("Bravo\t5"), "{t:?}");
+    assert_eq!(t.matches("Charlie").count(), 1, "the new heading isn't listed: {t:?}");
+    run(&mut s, "edit.undo", json!({}));
+    assert!(text(&s).contains("Alpha, revised\t2") && text(&s).contains("Bravo\t3"), "{:?}", text(&s));
+    // F9 (Update Field) with the same choice.
+    run(&mut s, "references.updateFields", json!({"pageNumbersOnly": true}));
+    let t = text(&s);
+    assert!(t.contains("Alpha, revised\t3") && t.contains("Bravo\t5") && t.matches("Charlie").count() == 1, "{t:?}");
+    // Update entire table rebuilds it from the headings.
+    run(&mut s, "references.updateToc", json!({"pageNumbersOnly": false}));
+    let t = text(&s);
+    assert!(t.contains("Alpha\t3") && !t.contains("revised") && t.contains("Charlie\t5"), "{t:?}");
+}
+
+/// #1197: without hyperlinks an entry finds its heading by its text; one edited by hand keeps
+/// its number, as nothing tells where it points any more.
+#[test]
+fn toc_page_numbers_only_without_links_matches_entries_by_text() {
+    let mut s = toc_alpha_bravo(false);
+    edit_after_toc(&mut s);
+    // Alpha moves a page down too, so a kept number shows.
+    break_before_heading(&mut s, 0);
+    run(&mut s, "references.updateToc", json!({"pageNumbersOnly": true}));
+    let t = text(&s);
+    assert!(t.contains("Alpha, revised\t2") && t.contains("Bravo\t5"), "{t:?}");
+}
+
+/// #1197: entries Word wrote keep their page number in a `PAGEREF` field to the heading's
+/// bookmark; Update page numbers only refreshes its result.
+#[test]
+fn toc_page_numbers_only_updates_pageref_fields() {
+    use wordcraft_doc::para::InlineObject;
+    let mut s = toc_alpha_bravo(true);
+    let entry = s.doc.body.iter().position(|b| b.as_para().is_some_and(|p| p.plain_text() == "Bravo\t3")).unwrap();
+    let path = wordcraft_doc::Path::top(entry);
+    let link = s.doc.para(StoryRef::Body, &path).unwrap().runs[0].props.link.clone().unwrap();
+    let p = s.doc.para_mut(StoryRef::Body, &path).unwrap();
+    let len = p.len();
+    p.delete(len - 1, len).unwrap();
+    let field = InlineObject::Field {
+        instr: format!("PAGEREF {} \\h", link.trim_start_matches('#')),
+        result: "3".into(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+    };
+    p.insert_object(len - 1, field, &wordcraft_doc::props::CharProps::default()).unwrap();
+    p.touch();
+    break_before_heading(&mut s, 1);
+    run(&mut s, "references.updateToc", json!({"pageNumbersOnly": true}));
+    let p = s.doc.para(StoryRef::Body, &path).unwrap();
+    assert!(
+        p.objects.iter().any(|o| matches!(o, InlineObject::Field { instr, result, .. } if instr.starts_with("PAGEREF") && result == "4")),
+        "{:?}",
+        p.objects
+    );
+}
+
 #[test]
 fn failed_command_leaves_document_unchanged() {
     let mut s = s();

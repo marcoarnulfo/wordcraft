@@ -233,6 +233,34 @@ fn custom_table_of_contents_dialog() {
     assert_eq!(TocForm::read(&a), f);
 }
 
+/// #1197: Update Table, and Update Field (F9) with the table of contents selected, ask what to
+/// update before touching it, page numbers only first; scripts say it and aren't asked.
+#[test]
+fn updating_the_table_of_contents_asks_what_to_update() {
+    let mut a = app("Intro\nBody");
+    a.run("select.text", json!({"text": "Intro"})).unwrap();
+    a.run("styles.apply", json!({"style": "Heading 1"})).unwrap();
+    a.run("caret.docStart", json!({})).unwrap();
+    a.run("references.toc", json!({})).unwrap();
+    let before = a.session.doc.plain_text(StoryRef::Body);
+    assert_eq!(a.run("references.updateToc", json!({})).unwrap(), json!({"pending": "updateToc"}));
+    let RefsDialog::UpdateToc { then, entire } = form(&a) else { panic!() };
+    assert_eq!((then.as_str(), entire), ("references.updateToc", false));
+    assert_eq!(a.session.doc.plain_text(StoryRef::Body), before, "nothing updated before the answer");
+    // F9 away from the table updates without asking; with the table selected it asks.
+    a.dialog = None;
+    a.run("caret.docEnd", json!({})).unwrap();
+    assert!(a.run("references.updateFields", json!({})).unwrap().get("pending").is_none());
+    assert!(a.dialog.is_none());
+    a.run("select.all", json!({})).unwrap();
+    assert_eq!(a.run("references.updateFields", json!({})).unwrap(), json!({"pending": "updateToc"}));
+    let RefsDialog::UpdateToc { then, .. } = form(&a) else { panic!() };
+    assert_eq!(then, "references.updateFields");
+    a.dialog = None;
+    assert!(a.run("references.updateToc", json!({"pageNumbersOnly": false})).unwrap().get("pending").is_none());
+    assert!(a.dialog.is_none());
+}
+
 /// #3013: Insert Table of Figures opens its dialog, which offers the document's own caption
 /// labels, so a list of tables (or of a custom label) can be built next to a list of figures.
 #[test]
