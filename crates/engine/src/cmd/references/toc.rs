@@ -464,8 +464,11 @@ pub fn update_toc_pages(s: &mut Session) -> Result<(), CmdError> {
     for (name, pos) in s.doc.bookmarks() {
         marks.entry(name).or_insert(pos);
     }
-    let mut by_text: Vec<(String, Pos)> =
+    let by_text: Vec<(String, Pos)> =
         toc_entries(s, &f).into_iter().map(|e| (e.text, Pos { story: StoryRef::Body, path: e.path, off: e.lead })).collect();
+    // Headings are matched in order: an entry's heading comes after the one the entry above found,
+    // so an entry edited by hand doesn't hand its heading to a later one with the same text.
+    let mut next = 0;
     for i in start + 1..=end {
         let path = Path::top(i);
         let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
@@ -497,20 +500,38 @@ pub fn update_toc_pages(s: &mut Session) -> Result<(), CmdError> {
         if no_pages.is_some_and(|(a, b)| (a..=b).contains(&level)) {
             continue;
         }
-        let Some(cut) = p.text.rfind(sep.as_str()) else { continue };
-        let at = cut + sep.len();
-        let Some(number) = p.text.get(at..).filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric())).map(str::to_string) else {
-            continue;
+        // Text deleted with Track Changes on isn't part of the entry.
+        let dels = p.deleted_ranges();
+        let live = |a: usize, b: usize| -> String {
+            p.text.char_indices().filter(|(i, c)| (a..b).contains(i) && *c != OBJ && !dels.iter().any(|r| r.contains(i))).map(|(_, c)| c).collect()
         };
-        let linked = p.props_of_char(0).link.as_deref().and_then(|l| l.strip_prefix('#')).and_then(|n| marks.get(n)).cloned();
-        let label = p.text.get(..cut).unwrap_or("").replace(OBJ, "");
-        let target = linked.or_else(|| {
-            let k = by_text.iter().position(|(t, _)| *t == label)?;
-            Some(by_text.remove(k).1)
-        });
-        let Some(page) = target.as_ref().and_then(page_at).filter(|page| *page != number) else { continue };
-        let props = p.props_of_char(at).clone();
+        let Some(cut) = p.text.rfind(sep.as_str()).filter(|cut| !dels.iter().any(|r| r.contains(cut))) else { continue };
+        let at = cut + sep.len();
         let len = p.len();
+        let number = live(at, len);
+        if number.is_empty() || !number.chars().all(|c| c.is_ascii_alphanumeric()) {
+            continue;
+        }
+        let linked = p.props_of_char(0).link.as_deref().and_then(|l| l.strip_prefix('#')).and_then(|n| marks.get(n)).cloned();
+        let target = match linked {
+            Some(pos) => {
+                if let Some(k) = by_text.iter().position(|(_, h)| h.path == pos.path) {
+                    next = k + 1;
+                }
+                Some(pos)
+            }
+            None => {
+                let label = live(0, cut);
+                by_text.iter().enumerate().skip(next).find(|(_, (t, _))| *t == label).map(|(k, (_, pos))| {
+                    next = k + 1;
+                    pos.clone()
+                })
+            }
+        };
+        let Some(page) = target.as_ref().and_then(page_at).filter(|page| *page != number) else { continue };
+        // The new number is plain text: no revision marks from the number it replaces.
+        let first = (at..len).find(|i| p.text.is_char_boundary(*i) && !dels.iter().any(|r| r.contains(i))).unwrap_or(at);
+        let props = CharProps { ins: None, del: None, fmt_change: None, ..p.props_of_char(first).clone() };
         let para = s.doc.para_mut(StoryRef::Body, &path)?;
         para.delete(at, len)?;
         para.insert_text(at, &page, &props)?;

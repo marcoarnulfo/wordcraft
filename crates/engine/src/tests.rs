@@ -4356,6 +4356,45 @@ fn toc_page_numbers_only_without_links_matches_entries_by_text() {
     assert!(t.contains("Alpha, revised\t2") && t.contains("Bravo\t5"), "{t:?}");
 }
 
+/// #1197: headings with the same text are matched in order, after the entries before them: an
+/// edited entry above doesn't hand its heading to a later namesake.
+#[test]
+fn toc_page_numbers_only_matches_repeated_headings_in_order() {
+    let mut s = s();
+    run(&mut s, "references.toc", json!({"hyperlinks": false}));
+    run(&mut s, "caret.docEnd", json!({}));
+    for name in ["Intro", "Body", "Intro"] {
+        run(&mut s, "text.pageBreak", json!({}));
+        run(&mut s, "text.insert", json!({"text": name}));
+        run(&mut s, "para.heading1", json!({}));
+        run(&mut s, "text.newParagraph", json!({}));
+    }
+    run(&mut s, "references.updateToc", json!({}));
+    assert!(text(&s).starts_with("Contents\nIntro\t2\nBody\t3\nIntro\t4\n"), "{:?}", text(&s));
+    run(&mut s, "select.text", json!({"text": "Intro"}));
+    run(&mut s, "text.insert", json!({"text": "Introduction"}));
+    break_before_heading(&mut s, 0);
+    run(&mut s, "references.updateToc", json!({"pageNumbersOnly": true}));
+    let t = text(&s);
+    assert!(t.starts_with("Contents\nIntroduction\t2\nBody\t4\nIntro\t5\n"), "{t:?}");
+}
+
+/// #1197: a number changed with Track Changes on is replaced by the plain page number, not by
+/// one that inherits the revision (struck through, or gone on Accept All).
+#[test]
+fn toc_page_numbers_only_drops_revisions_in_the_number() {
+    let mut s = toc_alpha_bravo(true);
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "select.text", json!({"text": "2"}));
+    run(&mut s, "text.insert", json!({"text": "9"}));
+    run(&mut s, "review.trackChanges", json!({"value": false}));
+    break_before_heading(&mut s, 0);
+    run(&mut s, "references.updateToc", json!({"pageNumbersOnly": true}));
+    let entry = s.doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.props.style.as_deref() == Some("TOC1")).unwrap();
+    assert_eq!(entry.final_text(), "Alpha\t3");
+    assert!(entry.runs.iter().all(|r| r.props.ins.is_none() && r.props.del.is_none()), "{:?}", entry.runs);
+}
+
 /// #1197: entries Word wrote keep their page number in a `PAGEREF` field to the heading's
 /// bookmark; Update page numbers only refreshes its result.
 #[test]
