@@ -4427,6 +4427,46 @@ fn toc_page_numbers_only_updates_pageref_fields() {
     );
 }
 
+/// #1197: in a section numbered in roman numerals the numbers Update page numbers only writes
+/// are roman too, in a `PAGEREF` field as in an entry's text, as Update Field writes them.
+#[test]
+fn toc_page_numbers_only_keeps_the_section_number_format() {
+    use wordcraft_doc::para::InlineObject;
+    let mut s = toc_alpha_bravo(true);
+    let entry = s.doc.body.iter().position(|b| b.as_para().is_some_and(|p| p.plain_text() == "Bravo\t3")).unwrap();
+    let path = wordcraft_doc::Path::top(entry);
+    let link = s.doc.para(StoryRef::Body, &path).unwrap().runs[0].props.link.clone().unwrap();
+    let p = s.doc.para_mut(StoryRef::Body, &path).unwrap();
+    let len = p.len();
+    p.delete(len - 1, len).unwrap();
+    let field = InlineObject::Field {
+        instr: format!("PAGEREF {} \\h", link.trim_start_matches('#')),
+        result: "iii".into(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+    };
+    p.insert_object(len - 1, field, &wordcraft_doc::props::CharProps::default()).unwrap();
+    p.touch();
+    run(&mut s, "layout.pageNumberFormat", json!({"format": "lowerRoman"}));
+    break_before_heading(&mut s, 1);
+    let pageref = |s: &Session| {
+        s.doc.para(StoryRef::Body, &path).unwrap().objects.iter().find_map(|o| match o {
+            InlineObject::Field { instr, result, .. } if instr.starts_with("PAGEREF") => Some(result.clone()),
+            _ => None,
+        })
+    };
+    run(&mut s, "references.updateToc", json!({"pageNumbersOnly": true}));
+    assert_eq!(pageref(&s).as_deref(), Some("iv"));
+    assert!(text(&s).contains("Alpha\tii"), "{:?}", text(&s));
+    // F9 with the same choice: Update Field's roman result isn't written over in decimal.
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "references.updateFields", json!({"pageNumbersOnly": true}));
+    assert_eq!(pageref(&s).as_deref(), Some("iv"));
+    assert!(text(&s).contains("Alpha\tii"), "{:?}", text(&s));
+}
+
 #[test]
 fn failed_command_leaves_document_unchanged() {
     let mut s = s();

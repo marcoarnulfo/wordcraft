@@ -458,8 +458,11 @@ pub fn update_toc_pages(s: &mut Session) -> Result<(), CmdError> {
     let f = FieldCode::parse(&instr);
     let sep = f.arg('p').map(str::to_string).unwrap_or_else(|| "\t".into());
     let no_pages = f.has('n').then(|| f.arg('n').and_then(level_range).unwrap_or((1, 9)));
+    // Numbers in the page's section format, as Update Field writes them.
+    let formats: Vec<NumFormat> = s.doc.sections().into_iter().map(|(_, sec)| sec.page_num_format).collect();
     let l = s.layout();
-    let page_at = |pos: &Pos| l.caret(pos).and_then(|c| l.pages.get(c.page)).map(|pg| pg.number.to_string());
+    let page_at =
+        |pos: &Pos| l.caret(pos).and_then(|c| l.pages.get(c.page)).map(|pg| (pg.number, formats.get(pg.section).copied().unwrap_or_default()));
     let mut marks: std::collections::HashMap<String, Pos> = Default::default();
     for (name, pos) in s.doc.bookmarks() {
         marks.entry(name).or_insert(pos);
@@ -478,7 +481,8 @@ pub fn update_toc_pages(s: &mut Session) -> Result<(), CmdError> {
             .enumerate()
             .filter_map(|(k, o)| match o {
                 InlineObject::Field { instr, locked: false, .. } if wordcraft_layout::fields::field_name(instr) == "PAGEREF" => {
-                    Some((k, marks.get(instr.split_whitespace().nth(1)?).and_then(page_at)?))
+                    let (n, fmt) = marks.get(instr.split_whitespace().nth(1)?).and_then(page_at)?;
+                    Some((k, wordcraft_layout::fields::format_switch(instr).unwrap_or(fmt).format(n)))
                 }
                 _ => None,
             })
@@ -531,7 +535,7 @@ pub fn update_toc_pages(s: &mut Session) -> Result<(), CmdError> {
                 })
             }
         };
-        let Some(page) = target.as_ref().and_then(page_at).filter(|page| *page != number) else { continue };
+        let Some(page) = target.as_ref().and_then(page_at).map(|(n, fmt)| fmt.format(n)).filter(|page| *page != number) else { continue };
         // The new number is plain text: no revision marks from the number it replaces.
         let first = (at..len).find(|i| p.text.is_char_boundary(*i) && !dels.iter().any(|r| r.contains(i))).unwrap_or(at);
         let props = CharProps { ins: None, del: None, fmt_change: None, ..p.props_of_char(first).clone() };
