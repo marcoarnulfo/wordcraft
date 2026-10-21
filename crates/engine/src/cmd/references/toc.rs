@@ -1,3 +1,4 @@
+use super::fields::ref_target;
 use super::{
     Block, CharProps, CmdError, CmdResult, Counters, FieldCode, InlineObject, LevelSuffix, NumFormat, OBJ, Paragraph, Path, Pos, Selection, Session,
     StoryRef, TabAlign, TabLeader, TabStop, Value, delete_selection, p, sel_result,
@@ -481,8 +482,9 @@ pub fn update_toc_pages(s: &mut Session) -> Result<(), CmdError> {
             .enumerate()
             .filter_map(|(k, o)| match o {
                 InlineObject::Field { instr, locked: false, .. } if wordcraft_layout::fields::field_name(instr) == "PAGEREF" => {
-                    let (n, fmt) = marks.get(instr.split_whitespace().nth(1)?).and_then(page_at)?;
-                    Some((k, wordcraft_layout::fields::format_switch(instr).unwrap_or(fmt).format(n)))
+                    let (n, fmt) = marks.get(&ref_target(instr)).and_then(page_at)?;
+                    let fmt = wordcraft_layout::fields::format_switch(instr).unwrap_or(fmt);
+                    Some((k, wordcraft_layout::fields::field_number(instr, fmt, n)))
                 }
                 _ => None,
             })

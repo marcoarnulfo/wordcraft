@@ -136,6 +136,13 @@ pub fn update_seq(s: &mut Session) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// The bookmark a `REF` or `PAGEREF` field points to, quoted or not, with any switch run into it
+/// left out (#2149).
+pub(super) fn ref_target(instr: &str) -> String {
+    let f = FieldCode::parse(instr);
+    f.args.first().map(|s| s.split('\\').next().unwrap_or("").trim_matches('"').to_string()).unwrap_or_default()
+}
+
 /// Whether `instr` has the one-letter switch `\sw`, also run together with another (`\p\h`).
 fn has_switch(instr: &str, sw: char) -> bool {
     instr.split('\\').skip(1).any(|s| {
@@ -211,12 +218,11 @@ pub fn update_fields_in(s: &mut Session, all: bool, toc_pages_only: bool) -> Res
                     updates.push((k, text_result(instr, crate::cmd::insert::format_date(&pic))));
                 }
                 "REF" | "PAGEREF" => {
-                    let f = FieldCode::parse(instr);
-                    let target = f.args.first().map(|s| s.split('\\').next().unwrap_or("").trim_matches('"')).unwrap_or("");
+                    let target = ref_target(instr);
                     let r = if name == "REF" {
-                        if !has_switch(instr, 'p') { bookmark_text(&s.doc, target) } else { None }
+                        if !has_switch(instr, 'p') { bookmark_text(&s.doc, &target) } else { None }
                     } else if !has_switch(instr, 'p') {
-                        pages.get(target).map(|(num, page_fmt)| {
+                        pages.get(&target).map(|(num, page_fmt)| {
                             let fmt = wordcraft_layout::fields::format_switch(instr).unwrap_or(*page_fmt);
                             wordcraft_layout::fields::field_number(instr, fmt, *num)
                         })
