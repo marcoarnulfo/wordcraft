@@ -2392,6 +2392,13 @@ fn context_menu_on_a_toc_still_offers_update_field_after_an_update() {
         for _ in 0..3 {
             h.step();
         }
+        // Update Table of Contents asks first (#1197); Update entire table lists the new heading.
+        h.get_by_label("Update entire table").click();
+        h.step();
+        h.get_by_label("OK").click();
+        for _ in 0..3 {
+            h.step();
+        }
         let text = h.state().session.doc.plain_text(StoryRef::Body);
         assert_eq!(text.matches(&name).count(), 2, "round {round}: the new heading is listed: {text}");
     }

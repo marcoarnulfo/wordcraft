@@ -512,7 +512,10 @@ pub fn update_toc_pages(s: &mut Session) -> Result<(), CmdError> {
         if number.is_empty() || !number.chars().all(|c| c.is_ascii_alphanumeric()) {
             continue;
         }
-        let linked = p.props_of_char(0).link.as_deref().and_then(|l| l.strip_prefix('#')).and_then(|n| marks.get(n)).cloned();
+        // The link spans the whole entry, number included, but text typed over the entry's text
+        // isn't part of it (#2911): what is left of the link still says where the entry points.
+        let link = p.runs.iter().find_map(|r| r.props.link.as_deref());
+        let linked = link.and_then(|l| l.strip_prefix('#')).and_then(|n| marks.get(n)).cloned();
         let target = match linked {
             Some(pos) => {
                 if let Some(k) = by_text.iter().position(|(_, h)| h.path == pos.path) {
