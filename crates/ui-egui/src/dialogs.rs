@@ -1388,6 +1388,10 @@ pub fn table_grid_picker(ui: &mut Ui, app: &mut WordApp) {
         }
     });
     ui.data_mut(|d| d.insert_temp(id, new_hover));
+    if new_hover != hover {
+        // The page may already be drawn this frame (Focus drops the ribbon over it afterwards).
+        ui.ctx().request_repaint();
+    }
     if let Some((r, c)) = clicked {
         let _ = app.run("insert.table", json!({"rows": r, "cols": c}));
         ui.close();

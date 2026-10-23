@@ -1685,6 +1685,10 @@ fn preview_layout_shows_a_command_without_running_it() {
     let cells = |l: &wordcraft_layout::DocLayout| l.index.keys().filter(|(st, p)| *st == StoryRef::Body && p.0.len() == 4).count();
     let preview = s.preview_layout("insert.table", &json!({"rows": 4, "cols": 3})).expect("a table can be inserted here");
     assert_eq!(cells(&preview), 12, "four rows of three cells");
+    // At the caret: after "Lanterns", the second block.
+    let tables: std::collections::BTreeSet<u32> =
+        preview.index.keys().filter(|(st, p)| *st == StoryRef::Body && p.0.len() == 4).map(|(_, p)| p.0[0]).collect();
+    assert_eq!(tables, [1].into(), "the table goes where the caret is");
     assert_eq!(s.doc, doc);
     assert_eq!((&s.sel, s.rev(), s.dirty), (&sel, rev, false));
     assert!(!s.can_undo() && s.last_command.is_none());
