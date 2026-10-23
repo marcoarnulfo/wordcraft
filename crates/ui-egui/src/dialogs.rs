@@ -1353,7 +1353,7 @@ impl Dialog {
     }
 }
 
-/// Grid picker for Insert › Table (hover to size, click to insert).
+/// Grid picker for Insert › Table (hover to size and preview on the page, click to insert).
 pub fn table_grid_picker(ui: &mut Ui, app: &mut WordApp) {
     let t = Tokens::get(ui.ctx());
     let id = egui::Id::new("table_picker_hover");
@@ -1391,6 +1391,9 @@ pub fn table_grid_picker(ui: &mut Ui, app: &mut WordApp) {
     if let Some((r, c)) = clicked {
         let _ = app.run("insert.table", json!({"rows": r, "cols": c}));
         ui.close();
+    } else if new_hover.0 > 0 {
+        // Word's Live Preview: the page shows the hovered table until a square is clicked.
+        app.canvas.table_preview = Some(new_hover);
     }
 }
 
@@ -4106,6 +4109,44 @@ mod tests {
     use wordcraft_doc::Pos;
     use wordcraft_doc::props::Align;
     use wordcraft_engine::Session;
+
+    /// #3931: hovering Insert › Table's grid asks the page for a preview of that table (rows by
+    /// columns) and changes nothing; leaving the grid drops it; a click inserts the table with no
+    /// preview left over for the page to show on top of it.
+    #[test]
+    fn the_table_grid_previews_the_hovered_table_until_the_click() {
+        use egui_kittest::kittest::Queryable;
+        let a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Lanterns")), crate::Services::default());
+        let mut h =
+            egui_kittest::Harness::builder().with_size(vec2(400.0, 400.0)).build_ui_state(|ui, app: &mut WordApp| table_grid_picker(ui, app), a);
+        h.run_steps(2);
+        let spacing = h.ctx.global_style().spacing.clone();
+        let top = h.get_by_label("Insert Table").rect();
+        // Squares are 16 points with 2 between, in grid columns at least `interact_size` wide:
+        // the middle of row 3, column 4.
+        let col = spacing.interact_size.x.max(16.0) + 2.0;
+        let at = egui::pos2(top.left() + 3.0 * col + 8.0, top.bottom() + spacing.item_spacing.y + 2.0 * 18.0 + 8.0);
+        h.event(egui::Event::PointerMoved(at));
+        h.run_steps(2);
+        assert_eq!(h.state().canvas.table_preview, Some((3, 4)), "three rows of four columns");
+        assert!(h.query_by_label("4×3 Table").is_some(), "the label reads columns × rows");
+        assert!(h.state().session.doc.body.iter().all(|b| b.as_table().is_none()) && !h.state().session.can_undo());
+        h.event(egui::Event::PointerMoved(egui::pos2(390.0, 390.0)));
+        h.state_mut().canvas.table_preview = None;
+        h.run_steps(2);
+        assert_eq!(h.state().canvas.table_preview, None, "off the grid nothing is previewed");
+        h.event(egui::Event::PointerMoved(at));
+        h.run_steps(2);
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+        h.step();
+        // The page takes the request every frame; here nothing does.
+        h.state_mut().canvas.table_preview = None;
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+        h.step();
+        let t = h.state().session.doc.body.iter().find_map(|b| b.as_table()).expect("the click inserts the table");
+        assert_eq!((t.rows.len(), t.cols()), (3, 4));
+        assert_eq!(h.state().canvas.table_preview, None, "the inserted table isn't previewed again");
+    }
 
     /// Go To's page box (#712): a number, +n / -n from the current page (a typographic minus
     /// too), empty for the next page; anything else is refused.

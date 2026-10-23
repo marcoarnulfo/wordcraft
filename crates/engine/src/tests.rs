@@ -1674,6 +1674,24 @@ fn tables_commands() {
     assert!(s.run("table.merge", &json!({})).is_err());
 }
 
+/// #3931: the page as a command would leave it, laid out without running it on the document:
+/// Insert › Table's grid previews the table it would insert. The document, the caret, the undo
+/// history and Repeat stay as they were.
+#[test]
+fn preview_layout_shows_a_command_without_running_it() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Lanterns"));
+    run(&mut s, "caret.docEnd", json!({}));
+    let (doc, sel, rev) = (s.doc.clone(), s.sel.clone(), s.rev());
+    let cells = |l: &wordcraft_layout::DocLayout| l.index.keys().filter(|(st, p)| *st == StoryRef::Body && p.0.len() == 4).count();
+    let preview = s.preview_layout("insert.table", &json!({"rows": 4, "cols": 3})).expect("a table can be inserted here");
+    assert_eq!(cells(&preview), 12, "four rows of three cells");
+    assert_eq!(s.doc, doc);
+    assert_eq!((&s.sel, s.rev(), s.dirty), (&sel, rev, false));
+    assert!(!s.can_undo() && s.last_command.is_none());
+    assert_eq!(cells(&s.layout()), 0, "the page itself has no table");
+    assert!(s.preview_layout("no.such", &json!({})).is_none());
+}
+
 #[test]
 fn delete_row_on_a_merge_start_promotes_the_cell_below() {
     use wordcraft_doc::props::VMerge;

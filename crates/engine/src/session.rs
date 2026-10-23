@@ -673,6 +673,10 @@ impl Session {
     }
 
     pub fn new(doc: Document) -> Self {
+        Self::with_registry(doc, Arc::new(crate::cmd::registry()))
+    }
+
+    fn with_registry(doc: Document, registry: Arc<Registry>) -> Self {
         let start = doc.start_of(StoryRef::Body);
         let bib_style = doc_bib_style(&doc);
         Session {
@@ -692,7 +696,7 @@ impl Session {
             find: FindState::default(),
             goal_x: None,
             page_hint: 0,
-            registry: Arc::new(crate::cmd::registry()),
+            registry,
             author: "WordCraft User".into(),
             initials: String::new(),
             painter: None,
@@ -966,6 +970,29 @@ impl Session {
         let (start, end) = typed_range(&self.doc.para_at(&at)?.text, at.off)?;
         Some(TypedWord { at, start, end })
     }
+    /// The page as command `id` would leave it, for a live preview (Insert › Table's grid, #3931):
+    /// the command runs on a copy of the document, with this caret and view, and the copy is laid
+    /// out. The document, the selection, the undo history and Repeat are untouched. `None` when
+    /// the command fails or isn't allowed here.
+    pub fn preview_layout(&mut self, id: &str, params: &Value) -> Option<Arc<DocLayout>> {
+        let mut copy = Session::with_registry(self.doc.clone(), self.registry.clone());
+        copy.sel = self.sel.clone();
+        copy.column = self.column.clone();
+        copy.widened = self.widened.clone();
+        copy.view = self.view.clone();
+        copy.prefs = self.prefs.clone();
+        copy.path = self.path.clone();
+        copy.file_name = self.file_name.clone();
+        copy.author = self.author.clone();
+        copy.system_region = self.system_region.clone();
+        copy.editing_lang = self.editing_lang.clone();
+        // The copy shares the paragraph layouts, so only what the command changed is laid out.
+        std::mem::swap(&mut copy.cache, &mut self.cache);
+        let layout = copy.run(id, params).is_ok().then(|| copy.layout());
+        std::mem::swap(&mut copy.cache, &mut self.cache);
+        layout
+    }
+
     /// A layout for output (PDF, images, print): no proofing marks, print view.
     pub fn export_layout(&self) -> Arc<DocLayout> {
         self.export_layout_with(false)

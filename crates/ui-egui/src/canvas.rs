@@ -199,6 +199,12 @@ pub struct CanvasState {
     pub(crate) tab_drag: Option<crate::ruler_tabs::TabDrag>,
     /// Whether the I-beam over the page is drawn rather than the system's (`ibeam`).
     pub(crate) drawn_ibeam: bool,
+    /// The rows and columns hovered in Insert › Table's grid this frame: the page shows that
+    /// table where it would go (#3931). Set by the grid each frame, taken by [`show`].
+    pub(crate) table_preview: Option<(usize, usize)>,
+    /// The last previewed table's layout, with what it was laid out for (rows, columns,
+    /// document id, revision), so a still pointer doesn't lay the document out every frame.
+    table_preview_layout: Option<((usize, usize, u64, u64), std::sync::Arc<DocLayout>)>,
 }
 
 impl CanvasState {
@@ -310,6 +316,8 @@ impl Default for CanvasState {
             tab_kind: Default::default(),
             tab_drag: None,
             drawn_ibeam: crate::ibeam::DRAWN,
+            table_preview: None,
+            table_preview_layout: None,
         }
     }
 }
@@ -935,6 +943,29 @@ fn drawing_grid_step(spacing: f32, scale: f32) -> f32 {
 
 /// Draw the document canvas in the space `ui` has left, one frame: the pages, caret, selection
 /// and rulers, with the mouse editing and the pointer shape over them.
+/// The layout the page shows: the document's own, or with the table Insert › Table's grid is
+/// hovering over (#3931). The preview is laid out on a copy, so the document and its undo history
+/// change only when a square is clicked.
+fn shown_layout(app: &mut WordApp) -> std::sync::Arc<DocLayout> {
+    let Some((rows, cols)) = app.canvas.table_preview.take() else {
+        app.canvas.table_preview_layout = None;
+        return app.session.layout();
+    };
+    let key = (rows, cols, app.session.document_id(), app.session.rev());
+    if let Some((k, l)) = &app.canvas.table_preview_layout
+        && *k == key
+    {
+        return l.clone();
+    }
+    match app.session.preview_layout("insert.table", &json!({"rows": rows, "cols": cols})) {
+        Some(l) => {
+            app.canvas.table_preview_layout = Some((key, l.clone()));
+            l
+        }
+        None => app.session.layout(),
+    }
+}
+
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let full = ui.available_rect_before_wrap();
@@ -996,7 +1027,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         app.canvas.alt_code.clear();
     }
     crate::ink::replay_tick(app, ui.ctx());
-    let layout = app.session.layout();
+    let layout = shown_layout(app);
     if let Some(anchor) = reflow_anchor
         && let Some(page) = reading_anchor_page(&layout, &anchor)
     {
@@ -3644,6 +3675,25 @@ fn is_followable_link(url: &str) -> bool {
 mod tests {
     use super::*;
     use crate::table_resize::tests::{H, cell, screen, steps, table_window};
+
+    /// #3931: while Insert › Table's grid asks for a preview the page is laid out with that
+    /// table; the document, its revision and undo history stay as they were, and without a
+    /// request the page is the document's own again.
+    #[test]
+    fn the_page_shows_the_table_the_grid_previews() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Lanterns")), crate::Services::default());
+        let cells = |l: &DocLayout| l.index.keys().filter(|(st, p)| *st == StoryRef::Body && p.0.len() == 4).count();
+        let (doc, rev) = (app.session.doc.clone(), app.session.rev());
+        app.canvas.table_preview = Some((2, 3));
+        assert_eq!(cells(&shown_layout(&mut app)), 6);
+        assert_eq!(app.canvas.table_preview, None, "a request lasts one frame");
+        assert_eq!((&app.session.doc, app.session.rev(), app.session.can_undo()), (&doc, rev, false));
+        app.canvas.table_preview = Some((2, 3));
+        let again = shown_layout(&mut app);
+        app.canvas.table_preview = Some((2, 3));
+        assert!(std::sync::Arc::ptr_eq(&again, &shown_layout(&mut app)), "a still pointer reuses the preview");
+        assert_eq!(cells(&shown_layout(&mut app)), 0, "no request: the document's own page");
+    }
 
     /// A window-following layout size (#1876, Read Mode): applied at once on entry or when forced,
     /// held while the window is dragged, applied once the size has been still for the settle time.
