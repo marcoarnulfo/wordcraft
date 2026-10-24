@@ -977,6 +977,16 @@ fn shown_layout(app: &mut WordApp) -> std::sync::Arc<DocLayout> {
     }
 }
 
+/// Focus draws the ribbon after the page, so the page takes the grid's last request a frame after
+/// the pointer left it. While the button is down anywhere but on a popup the pointer is editing
+/// the page, whose mouse handling must hit-test the document's own layout, not the preview's.
+fn drop_stale_table_preview(app: &mut WordApp, ctx: &egui::Context) {
+    let (busy, at) = ctx.input(|i| (i.pointer.any_down() || i.pointer.any_released(), i.pointer.interact_pos()));
+    if busy && at.is_some_and(|p| ctx.layer_id_at(p).is_none_or(|l| l.order == egui::Order::Background)) {
+        app.canvas.table_preview = None;
+    }
+}
+
 /// The document the pages of [`shown_layout`] are drawn from: the previewed copy while the page
 /// shows Insert › Table's preview, whose paragraph paths are the layout's (#3931).
 fn page_doc(app: &WordApp) -> &wordcraft_doc::Document {
@@ -1050,6 +1060,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         app.canvas.alt_code.clear();
     }
     crate::ink::replay_tick(app, ui.ctx());
+    drop_stale_table_preview(app, ui.ctx());
     let layout = shown_layout(app);
     if let Some(anchor) = reflow_anchor
         && let Some(page) = reading_anchor_page(&layout, &anchor)
@@ -3788,6 +3799,36 @@ mod tests {
         app.canvas.table_preview = Some((2, 2));
         let web = shown_layout(&mut app);
         assert_eq!(web.pages[0].w, app.session.layout().pages[0].w, "laid out at the Web view's width");
+    }
+
+    /// #3931 review: Focus draws the ribbon after the page, so the page takes the grid's last
+    /// request a frame after the pointer left it. A press on the page must edit the document's
+    /// own layout, not the preview's, whose paragraph paths are somewhere else.
+    #[test]
+    fn a_press_on_the_page_ignores_a_stale_table_preview() {
+        let click = |stale: bool| {
+            let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Lanterns\nKites")), Default::default());
+            a.session.run("caret.docStart", &json!({})).unwrap();
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+                |ui, app: &mut WordApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                a,
+            );
+            steps(&mut h, 6);
+            let at = screen(&mut h, 78.0, 94.0);
+            h.event(egui::Event::PointerMoved(at));
+            steps(&mut h, 2);
+            if stale {
+                h.state_mut().canvas.table_preview = Some((3, 3));
+            }
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+            h.step();
+            h.state().session.sel.clone()
+        };
+        assert_eq!(click(true), click(false), "the press lands as it does with no preview requested");
     }
 
     /// A window-following layout size (#1876, Read Mode): applied at once on entry or when forced,
