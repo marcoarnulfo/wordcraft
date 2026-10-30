@@ -385,8 +385,10 @@ impl WordApp {
     /// Ask where to save, save there, then do `after`.
     pub(crate) fn save_as(&mut self, after: AfterSave) -> Asked {
         let name = self.default_save_name();
-        // Start in the open file's folder (#4143); a document never saved has none.
-        let dir = self.session.path.as_deref().and_then(std::path::Path::parent).map(|d| d.to_string_lossy().into_owned());
+        // Start in the open file's folder (#4143); a document never saved has none. A path opened
+        // as `one.docx` has an empty parent, so it's made absolute first.
+        let dir =
+            self.session.path.as_deref().and_then(|p| std::path::absolute(p).ok()).and_then(|p| p.parent().map(|d| d.to_string_lossy().into_owned()));
         self.ask_file(FileDialogRequest::Save { name, dir }, AfterPick::SaveAs { after, document: self.session.document_id() })
     }
 
@@ -811,6 +813,19 @@ mod tests {
         assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "Document1.docx".into(), dir: None });
         answer(&shown, None);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A file opened by a relative path (`wordcraft one.docx`) has an empty parent: Save As starts
+    /// in the working folder, not with an empty folder the dialog would drop.
+    #[test]
+    fn save_as_starts_in_the_working_folder_for_a_relative_path() {
+        let (mut a, shown) = async_app();
+        typed(&mut a);
+        a.session.path = Some(std::path::PathBuf::from("one.docx"));
+        a.save_as_dialog();
+        let cwd = std::env::current_dir().unwrap().to_string_lossy().into_owned();
+        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "one.docx".into(), dir: Some(cwd) });
+        answer(&shown, None);
     }
 
     /// Save As returns at once (the UI keeps running); the frame loop saves once the answer arrives.
