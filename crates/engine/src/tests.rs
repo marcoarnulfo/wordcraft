@@ -3803,15 +3803,18 @@ fn word_toc_control_with_the_field_end_after_the_entries_survives_update_and_sav
 /// #1197 (jpc7k1, checked against Word for Mac): a TOC kept as a range field (a Word table with no
 /// TOC heading above it) updates only the `PAGEREF` numbers on Update page numbers only, as Word
 /// does: an entry edited by hand keeps its text, the numbers follow the headings again, and a
-/// heading added since isn't listed. Without `PAGEREF` fields it is still rebuilt whole.
+/// heading added since isn't listed. Without `PAGEREF` fields it is still rebuilt whole. As with
+/// F9, a locked `PAGEREF` and one with `\p` (above/below) keep their result, and neither makes the
+/// table count as one without `PAGEREF` fields.
 #[test]
 fn toc_page_numbers_only_updates_a_range_toc_without_a_heading() {
     use std::io::Write;
     let style = |st: &str, inner: &str| format!(r#"<w:p><w:pPr><w:pStyle w:val="{st}"/></w:pPr>{inner}</w:p>"#);
     let t = |s: &str| format!(r#"<w:r><w:t xml:space="preserve">{s}</w:t></w:r>"#);
-    let field = |instr: &str, result: &str| {
+    let field = |instr: &str, result: &str, locked: bool| {
+        let lock = if locked { r#" w:fldLock="1""# } else { "" };
         format!(
-            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> {instr} </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>{}<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="begin"{lock}/></w:r><w:r><w:instrText xml:space="preserve"> {instr} </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>{}<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
             t(result)
         )
     };
@@ -3821,8 +3824,15 @@ fn toc_page_numbers_only_updates_a_range_toc_without_a_heading() {
         let br = if page_break { r#"<w:r><w:br w:type="page"/></w:r>"# } else { "" };
         style(st, &format!(r#"{br}<w:bookmarkStart w:id="{id}" w:name="{mark}"/>{}<w:bookmarkEnd w:id="{id}"/>"#, t(text)))
     };
-    let docx = |pagerefs: bool| {
-        let number = |mark: &str| if pagerefs { field(&format!("PAGEREF {mark} \\h"), "9") } else { t("9") };
+    // `numbers`: "pageref", "locked" (every PAGEREF locked), "above" (the first one `\p`), or plain text.
+    let docx = |numbers: &str| {
+        let number = |mark: &str| match numbers {
+            "pageref" => field(&format!("PAGEREF {mark} \\h"), "9", false),
+            "locked" => field(&format!("PAGEREF {mark} \\h"), "9", true),
+            "above" if mark == "_Toc1" => field(&format!("PAGEREF {mark} \\p \\h"), "below", false),
+            "above" => field(&format!("PAGEREF {mark} \\h"), "9", false),
+            _ => t("9"),
+        };
         // The first entry was retyped by hand; both numbers are stale.
         let xml = format!(
             r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{}{}{}{}{}</w:body></w:document>"#,
@@ -3845,8 +3855,8 @@ fn toc_page_numbers_only_updates_a_range_toc_without_a_heading() {
         }
         zip.finish().unwrap().into_inner()
     };
-    let open = |pagerefs: bool| {
-        let mut s = Session::new(wordcraft_docx::read(&docx(pagerefs)).unwrap());
+    let open = |numbers: &str| {
+        let mut s = Session::new(wordcraft_docx::read(&docx(numbers)).unwrap());
         assert_eq!(s.doc.field_ranges(StoryRef::Body).len(), 1, "read as a range field: {}", text(&s));
         // A heading added since the table was made.
         run(&mut s, "caret.docEnd", json!({}));
@@ -3856,7 +3866,7 @@ fn toc_page_numbers_only_updates_a_range_toc_without_a_heading() {
         s
     };
 
-    let mut s = open(true);
+    let mut s = open("pageref");
     run(&mut s, "references.updateToc", json!({"pageNumbersOnly": true}));
     let after = text(&s);
     assert!(after.contains("Our introduction\t1\n"), "the edited entry keeps its text, its number follows the heading: {after:?}");
@@ -3866,8 +3876,24 @@ fn toc_page_numbers_only_updates_a_range_toc_without_a_heading() {
     assert!(s.undo());
     assert!(text(&s).contains("Our introduction\t9\n"), "one undo step: {}", text(&s));
 
+    // Locked numbers keep their result, and the table isn't rebuilt either.
+    let mut s = open("locked");
+    run(&mut s, "references.updateToc", json!({"pageNumbersOnly": true}));
+    let after = text(&s);
+    assert!(after.contains("Our introduction\t9\n") && after.contains("Methods\t9\n"), "{after:?}");
+    assert_eq!(after.matches("Results").count(), 1, "{after:?}");
+    assert_eq!(s.doc.field_ranges(StoryRef::Body).len(), 1, "the table stays Word's range field");
+
+    // `\p` says above or below, not a page number: F9 leaves it, and so does this.
+    let mut s = open("above");
+    run(&mut s, "references.updateToc", json!({"pageNumbersOnly": true}));
+    let after = text(&s);
+    assert!(after.contains("Our introduction\tbelow\n"), "{after:?}");
+    assert!(after.contains("Methods\t2\n"), "{after:?}");
+    assert_eq!(s.doc.field_ranges(StoryRef::Body).len(), 1, "the table stays Word's range field");
+
     // No PAGEREF fields to update: the table is rebuilt whole, from the headings.
-    let mut s = open(false);
+    let mut s = open("plain");
     run(&mut s, "references.updateToc", json!({"pageNumbersOnly": true}));
     let after = text(&s);
     assert!(!after.contains("Our introduction"), "{after:?}");

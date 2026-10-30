@@ -1,4 +1,4 @@
-use super::fields::ref_target;
+use super::fields::{has_switch, ref_target};
 use super::{
     Block, CharProps, CmdError, CmdResult, Counters, FieldCode, InlineObject, LevelSuffix, NumFormat, OBJ, Paragraph, Path, Pos, Selection, Session,
     StoryRef, TabAlign, TabLeader, TabStop, Value, delete_selection, p, sel_result,
@@ -563,7 +563,9 @@ pub fn update_toc_pages(s: &mut Session) -> Result<(), CmdError> {
 }
 
 /// Point every unlocked `PAGEREF` field in the body paragraphs `blocks` at the page its bookmark
-/// is on, in the page's section format; the number of fields found.
+/// is on, in the page's section format; the number of fields found. Locked ones and `\p` ones
+/// (above/below) keep their result, as with F9, but count: they are numbers Word wrote, and
+/// rebuilding the table for them would lose its entries.
 fn update_pagerefs(s: &mut Session, blocks: std::ops::RangeInclusive<usize>) -> Result<usize, CmdError> {
     let formats: Vec<NumFormat> = s.doc.sections().into_iter().map(|(_, sec)| sec.page_num_format).collect();
     let l = s.layout();
@@ -576,11 +578,14 @@ fn update_pagerefs(s: &mut Session, blocks: std::ops::RangeInclusive<usize>) -> 
     for i in blocks {
         let Some(p) = s.doc.para(StoryRef::Body, &Path::top(i)) else { continue };
         for (k, o) in p.objects.iter().enumerate() {
-            let InlineObject::Field { instr, locked: false, .. } = o else { continue };
+            let InlineObject::Field { instr, locked, .. } = o else { continue };
             if wordcraft_layout::fields::field_name(instr) != "PAGEREF" {
                 continue;
             }
             found += 1;
+            if *locked || has_switch(instr, 'p') {
+                continue;
+            }
             let page = marks.get(&ref_target(instr)).and_then(|pos| l.caret(pos)).and_then(|c| l.pages.get(c.page));
             if let Some(pg) = page {
                 let fmt = wordcraft_layout::fields::format_switch(instr).unwrap_or(formats.get(pg.section).copied().unwrap_or_default());

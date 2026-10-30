@@ -144,7 +144,7 @@ pub(super) fn ref_target(instr: &str) -> String {
 }
 
 /// Whether `instr` has the one-letter switch `\sw`, also run together with another (`\p\h`).
-fn has_switch(instr: &str, sw: char) -> bool {
+pub(super) fn has_switch(instr: &str, sw: char) -> bool {
     instr.split('\\').skip(1).any(|s| {
         let mut chars = s.chars();
         chars.next().is_some_and(|c| c.eq_ignore_ascii_case(&sw)) && chars.next().is_none_or(|c| !c.is_alphanumeric())
