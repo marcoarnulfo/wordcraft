@@ -495,7 +495,10 @@ pub fn update_toc_pages(s: &mut Session) -> Result<(), CmdError> {
             .iter()
             .enumerate()
             .filter_map(|(k, o)| match o {
-                InlineObject::Field { instr, locked: false, .. } if wordcraft_layout::fields::field_name(instr) == "PAGEREF" => {
+                // `\p` shows "above" or "below", not a number: F9 leaves it, and so does this.
+                InlineObject::Field { instr, locked: false, .. }
+                    if wordcraft_layout::fields::field_name(instr) == "PAGEREF" && !has_switch(instr, 'p') =>
+                {
                     let (n, fmt) = marks.get(&ref_target(instr)).and_then(page_at)?;
                     let fmt = wordcraft_layout::fields::format_switch(instr).unwrap_or(fmt);
                     Some((k, wordcraft_layout::fields::field_number(instr, fmt, n)))

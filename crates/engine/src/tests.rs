@@ -4576,6 +4576,33 @@ fn toc_page_numbers_only_reads_a_quoted_pageref_bookmark() {
     );
 }
 
+/// #1197: a `PAGEREF … \p` says "above" or "below", not a page number; Update page numbers only
+/// leaves it as F9 does.
+#[test]
+fn toc_page_numbers_only_leaves_an_above_below_pageref() {
+    use wordcraft_doc::para::InlineObject;
+    let mut s = toc_alpha_bravo(true);
+    let entry = s.doc.body.iter().position(|b| b.as_para().is_some_and(|p| p.plain_text() == "Bravo\t3")).unwrap();
+    let path = wordcraft_doc::Path::top(entry);
+    let link = s.doc.para(StoryRef::Body, &path).unwrap().runs[0].props.link.clone().unwrap();
+    let p = s.doc.para_mut(StoryRef::Body, &path).unwrap();
+    let len = p.len();
+    p.delete(len - 1, len).unwrap();
+    let field = InlineObject::Field {
+        instr: format!("PAGEREF {} \\p \\h", link.trim_start_matches('#')),
+        result: "below".into(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+    };
+    p.insert_object(len - 1, field, &wordcraft_doc::props::CharProps::default()).unwrap();
+    p.touch();
+    break_before_heading(&mut s, 1);
+    run(&mut s, "references.updateToc", json!({"pageNumbersOnly": true}));
+    assert_eq!(s.doc.para(StoryRef::Body, &path).unwrap().plain_text(), "Bravo\tbelow");
+}
+
 /// #1197: in a section numbered in roman numerals the numbers Update page numbers only writes
 /// are roman too, in a `PAGEREF` field as in an entry's text, as Update Field writes them.
 #[test]
