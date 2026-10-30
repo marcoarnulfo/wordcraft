@@ -452,9 +452,20 @@ pub fn update_toc(s: &mut Session) -> Result<(), CmdError> {
 /// entries stay as they are, text edited in the table included; headings added since aren't
 /// listed. An entry finds its heading through the `PAGEREF` field Word writes for the number, its
 /// link, or else its text; one whose heading can't be found keeps its number. A table kept as a
-/// range field (imported with content the engine's TOC can't reproduce) is rebuilt whole.
+/// range field (imported with content the engine's TOC can't reproduce, such as a Word table
+/// with no TOC heading above it) updates the `PAGEREF` fields Word writes for its numbers, as
+/// Word for Mac does, and is rebuilt whole only when it has none.
 pub fn update_toc_pages(s: &mut Session) -> Result<(), CmdError> {
-    let Some((start, end)) = toc_range(s) else { return update_toc(s) };
+    let Some((start, end)) = toc_range(s) else {
+        let range = s.doc.field_ranges(StoryRef::Body).into_iter().find(|r| convertible_toc_range(s, r));
+        if let Some(r) = range
+            && update_pagerefs(s, r.start.path.last()..=r.end.path.last())? > 0
+        {
+            s.touch();
+            return Ok(());
+        }
+        return update_toc(s);
+    };
     let Some(instr) = s.doc.body.get(start).and_then(|b| b.as_para()).and_then(toc_field) else { return Ok(()) };
     let f = FieldCode::parse(&instr);
     let sep = f.arg('p').map(str::to_string).unwrap_or_else(|| "\t".into());
@@ -549,6 +560,43 @@ pub fn update_toc_pages(s: &mut Session) -> Result<(), CmdError> {
     s.clamp_selection();
     s.touch();
     Ok(())
+}
+
+/// Point every unlocked `PAGEREF` field in the body paragraphs `blocks` at the page its bookmark
+/// is on, in the page's section format; the number of fields found.
+fn update_pagerefs(s: &mut Session, blocks: std::ops::RangeInclusive<usize>) -> Result<usize, CmdError> {
+    let formats: Vec<NumFormat> = s.doc.sections().into_iter().map(|(_, sec)| sec.page_num_format).collect();
+    let l = s.layout();
+    let mut marks: std::collections::HashMap<String, Pos> = Default::default();
+    for (name, pos) in s.doc.bookmarks() {
+        marks.entry(name).or_insert(pos);
+    }
+    let mut found = 0;
+    let mut updates: Vec<(usize, usize, String)> = Vec::new();
+    for i in blocks {
+        let Some(p) = s.doc.para(StoryRef::Body, &Path::top(i)) else { continue };
+        for (k, o) in p.objects.iter().enumerate() {
+            let InlineObject::Field { instr, locked: false, .. } = o else { continue };
+            if wordcraft_layout::fields::field_name(instr) != "PAGEREF" {
+                continue;
+            }
+            found += 1;
+            let page = marks.get(&ref_target(instr)).and_then(|pos| l.caret(pos)).and_then(|c| l.pages.get(c.page));
+            if let Some(pg) = page {
+                let fmt = wordcraft_layout::fields::format_switch(instr).unwrap_or(formats.get(pg.section).copied().unwrap_or_default());
+                updates.push((i, k, wordcraft_layout::fields::field_number(instr, fmt, pg.number)));
+            }
+        }
+    }
+    for (i, k, page) in updates {
+        let para = s.doc.para_mut(StoryRef::Body, &Path::top(i))?;
+        if let Some(InlineObject::Field { result, dirty, .. }) = para.objects.get_mut(k) {
+            *result = page;
+            *dirty = false;
+        }
+        para.touch();
+    }
+    Ok(found)
 }
 
 /// Rebuild the entries the TOC field's switches ask for. The tab leader is `leader`, or the one
