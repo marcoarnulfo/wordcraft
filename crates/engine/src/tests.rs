@@ -3805,7 +3805,8 @@ fn word_toc_control_with_the_field_end_after_the_entries_survives_update_and_sav
 /// does: an entry edited by hand keeps its text, the numbers follow the headings again, and a
 /// heading added since isn't listed. Without `PAGEREF` fields it is still rebuilt whole. As with
 /// F9, a locked `PAGEREF` and one with `\p` (above/below) keep their result, and neither makes the
-/// table count as one without `PAGEREF` fields.
+/// table count as one without `PAGEREF` fields. The entries may be laid out as a table, the numbers
+/// in its cells.
 #[test]
 fn toc_page_numbers_only_updates_a_range_toc_without_a_heading() {
     use std::io::Write;
@@ -3824,7 +3825,8 @@ fn toc_page_numbers_only_updates_a_range_toc_without_a_heading() {
         let br = if page_break { r#"<w:r><w:br w:type="page"/></w:r>"# } else { "" };
         style(st, &format!(r#"{br}<w:bookmarkStart w:id="{id}" w:name="{mark}"/>{}<w:bookmarkEnd w:id="{id}"/>"#, t(text)))
     };
-    // `numbers`: "pageref", "locked" (every PAGEREF locked), "above" (the first one `\p`), or plain text.
+    // `numbers`: "pageref", "locked" (every PAGEREF locked), "above" (the first one `\p`), "table"
+    // (PAGEREF fields in a table's right-hand cells), or plain text.
     let docx = |numbers: &str| {
         let number = |mark: &str| match numbers {
             "pageref" => field(&format!("PAGEREF {mark} \\h"), "9", false),
@@ -3834,11 +3836,18 @@ fn toc_page_numbers_only_updates_a_range_toc_without_a_heading() {
             _ => t("9"),
         };
         // The first entry was retyped by hand; both numbers are stale.
+        let entries = if numbers == "table" {
+            let cell = |inner: String| format!("<w:tc><w:p>{inner}</w:p></w:tc>");
+            let row = |label: &str, mark: &str| format!("<w:tr>{}{}</w:tr>", cell(t(label)), cell(field(&format!("PAGEREF {mark} \\h"), "9", false)));
+            format!("{}<w:tbl>{}{}</w:tbl>{}", style("TOC1", begin), row("Our introduction", "_Toc1"), row("Methods", "_Toc2"), style("TOC1", end))
+        } else {
+            style("TOC1", &format!("{begin}{}{}", t("Our introduction\t"), number("_Toc1")))
+                + &style("TOC1", &format!("{}{}{end}", t("Methods\t"), number("_Toc2")))
+        };
         let xml = format!(
-            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{}{}{}{}{}</w:body></w:document>"#,
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{}{}{}{}</w:body></w:document>"#,
             style("Normal", &t("Before.")),
-            style("TOC1", &format!("{begin}{}{}", t("Our introduction\t"), number("_Toc1"))),
-            style("TOC1", &format!("{}{}{end}", t("Methods\t"), number("_Toc2"))),
+            entries,
             heading("Heading1", "_Toc1", 1, "Introduction", false),
             heading("Heading1", "_Toc2", 2, "Methods", true),
         );
@@ -3890,6 +3899,14 @@ fn toc_page_numbers_only_updates_a_range_toc_without_a_heading() {
     let after = text(&s);
     assert!(after.contains("Our introduction\tbelow\n"), "{after:?}");
     assert!(after.contains("Methods\t2\n"), "{after:?}");
+    assert_eq!(s.doc.field_ranges(StoryRef::Body).len(), 1, "the table stays Word's range field");
+
+    // Entries in a table: the numbers in its cells are updated and the table stays.
+    let mut s = open("table");
+    run(&mut s, "references.updateToc", json!({"pageNumbersOnly": true}));
+    let after = text(&s);
+    assert!(after.contains("Our introduction\t1\nMethods\t2"), "{after:?}");
+    assert!(s.doc.body.iter().any(|b| matches!(&**b, wordcraft_doc::Block::Table(_))), "the table is kept: {after:?}");
     assert_eq!(s.doc.field_ranges(StoryRef::Body).len(), 1, "the table stays Word's range field");
 
     // No PAGEREF fields to update: the table is rebuilt whole, from the headings.

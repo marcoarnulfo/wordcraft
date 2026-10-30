@@ -565,10 +565,10 @@ pub fn update_toc_pages(s: &mut Session) -> Result<(), CmdError> {
     Ok(())
 }
 
-/// Point every unlocked `PAGEREF` field in the body paragraphs `blocks` at the page its bookmark
-/// is on, in the page's section format; the number of fields found. Locked ones and `\p` ones
-/// (above/below) keep their result, as with F9, but count: they are numbers Word wrote, and
-/// rebuilding the table for them would lose its entries.
+/// Point every unlocked `PAGEREF` field in the body blocks `blocks`, their tables' cells included,
+/// at the page its bookmark is on, in the page's section format; the number of fields found.
+/// Locked ones and `\p` ones (above/below) keep their result, as with F9, but count: they are
+/// numbers Word wrote, and rebuilding the table for them would lose its entries.
 fn update_pagerefs(s: &mut Session, blocks: std::ops::RangeInclusive<usize>) -> Result<usize, CmdError> {
     let formats: Vec<NumFormat> = s.doc.sections().into_iter().map(|(_, sec)| sec.page_num_format).collect();
     let l = s.layout();
@@ -577,9 +577,10 @@ fn update_pagerefs(s: &mut Session, blocks: std::ops::RangeInclusive<usize>) -> 
         marks.entry(name).or_insert(pos);
     }
     let mut found = 0;
-    let mut updates: Vec<(usize, usize, String)> = Vec::new();
-    for i in blocks {
-        let Some(p) = s.doc.para(StoryRef::Body, &Path::top(i)) else { continue };
+    let mut updates: Vec<(Path, usize, String)> = Vec::new();
+    let paths = s.doc.para_paths(StoryRef::Body).into_iter().filter(|path| path.0.first().is_some_and(|i| blocks.contains(&(*i as usize))));
+    for path in paths {
+        let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
         for (k, o) in p.objects.iter().enumerate() {
             let InlineObject::Field { instr, locked, .. } = o else { continue };
             if wordcraft_layout::fields::field_name(instr) != "PAGEREF" {
@@ -592,12 +593,12 @@ fn update_pagerefs(s: &mut Session, blocks: std::ops::RangeInclusive<usize>) -> 
             let page = marks.get(&ref_target(instr)).and_then(|pos| l.caret(pos)).and_then(|c| l.pages.get(c.page));
             if let Some(pg) = page {
                 let fmt = wordcraft_layout::fields::format_switch(instr).unwrap_or(formats.get(pg.section).copied().unwrap_or_default());
-                updates.push((i, k, wordcraft_layout::fields::field_number(instr, fmt, pg.number)));
+                updates.push((path.clone(), k, wordcraft_layout::fields::field_number(instr, fmt, pg.number)));
             }
         }
     }
-    for (i, k, page) in updates {
-        let para = s.doc.para_mut(StoryRef::Body, &Path::top(i))?;
+    for (path, k, page) in updates {
+        let para = s.doc.para_mut(StoryRef::Body, &path)?;
         if let Some(InlineObject::Field { result, dirty, .. }) = para.objects.get_mut(k) {
             *result = page;
             *dirty = false;
