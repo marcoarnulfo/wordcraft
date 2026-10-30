@@ -22,7 +22,7 @@ use notes::{note, note_refs};
 pub use properties::{bookmark_text, date_picture};
 #[cfg(test)]
 use toc::cached_toc_tabs;
-pub use toc::{caret_in_toc, has_toc, leader, level_range, toc_instr, toc_selected, update_toc, update_toc_pages};
+pub use toc::{caret_in_toc, has_toc, leader, level_range, toc_instr, toc_selected, toc_span, update_toc, update_toc_pages};
 pub(crate) use toc::{headings, toc_bookmark};
 use toc::{insert_toc, remove_toc, toc_range};
 

@@ -261,6 +261,43 @@ fn updating_the_table_of_contents_asks_what_to_update() {
     assert!(a.dialog.is_none());
 }
 
+/// #1197: a table of contents kept as a range field (a Word table with no TOC heading above it)
+/// asks too: Update Table, F9 in the table or with everything selected, and the context menu's
+/// Update Field, which runs Update Table where `caret_in_toc` offers it.
+#[test]
+fn a_range_toc_without_a_heading_asks_what_to_update() {
+    use wordcraft_doc::props::CharProps;
+    use wordcraft_doc::{Path, Pos};
+    let mut d = wordcraft_doc::Document::from_text("Before.\nOld entry\t9\nAlpha\nBody");
+    {
+        let p = d.para_mut(StoryRef::Body, &Path::top(1)).unwrap();
+        let n = p.len();
+        p.insert_object(n, InlineObject::FieldEnd, &CharProps::default()).unwrap();
+        p.insert_object(0, InlineObject::FieldStart { instr: r#"TOC \o "1-2" \h"#.into(), locked: false, dirty: false }, &CharProps::default())
+            .unwrap();
+    }
+    let mut a = WordApp::new(Session::new(d), Services::default());
+    a.run("caret.set", json!({"pos": Pos::body(2, 0)})).unwrap();
+    a.run("styles.apply", json!({"style": "Heading 1"})).unwrap();
+    assert_eq!(a.session.doc.field_ranges(StoryRef::Body).len(), 1, "a range field, not the engine's TOC");
+    let before = a.session.doc.plain_text(StoryRef::Body);
+    assert_eq!(a.run("references.updateToc", json!({})).unwrap(), json!({"pending": "updateToc"}));
+    assert_eq!(a.session.doc.plain_text(StoryRef::Body), before, "nothing updated before the answer");
+    a.dialog = None;
+    a.run("caret.set", json!({"pos": Pos::body(1, 3)})).unwrap();
+    assert!(wordcraft_engine::cmd::references::caret_in_toc(&a.session), "the context menu offers Update Field here");
+    assert_eq!(a.run("references.updateFields", json!({})).unwrap(), json!({"pending": "updateToc"}));
+    let RefsDialog::UpdateToc { then, .. } = form(&a) else { panic!() };
+    assert_eq!(then, "references.updateFields");
+    a.dialog = None;
+    a.run("select.all", json!({})).unwrap();
+    assert_eq!(a.run("references.updateFields", json!({})).unwrap(), json!({"pending": "updateToc"}));
+    a.dialog = None;
+    // Away from the table F9 doesn't ask.
+    a.run("caret.docEnd", json!({})).unwrap();
+    assert!(a.run("references.updateFields", json!({})).unwrap().get("pending").is_none());
+}
+
 /// #3013: Insert Table of Figures opens its dialog, which offers the document's own caption
 /// labels, so a list of tables (or of a custom label) can be built next to a list of figures.
 #[test]

@@ -220,16 +220,19 @@ pub fn caret_in_toc(s: &Session) -> bool {
     if at.story != StoryRef::Body || at.path.depth() != 0 {
         return false;
     }
-    if toc_range(s).is_some_and(|(start, end)| (start..=end).contains(&at.path.last())) {
-        return true;
-    }
-    // A saved or imported TOC is a range field spanning its entries until Update Table turns it
-    // into the engine's TOC (#2182, a save and reopen; not the flow in the report). Only the
-    // range Update Table would convert counts, so the menu never refreshes a different TOC.
-    s.doc.field_ranges(StoryRef::Body).into_iter().find(|r| convertible_toc_range(s, r)).is_some_and(|r| {
-        // The caret at the field's own marker (offset 0 of the first entry) and at the end of
-        // the last entry belong to the range as well.
-        (r.start.path.last()..=r.end.path.last()).contains(&at.path.last())
+    toc_span(s).is_some_and(|(start, end)| (start..=end).contains(&at.path.last()))
+}
+
+/// The body blocks of the table of contents Update Table works on: the engine's TOC, or else a
+/// saved or imported TOC that is still a range field spanning its entries until Update Table
+/// turns it into the engine's TOC (#2182, a save and reopen; a Word table with no TOC heading,
+/// #1197). Only the range Update Table would convert counts, so the menu and the Update Table of
+/// Contents dialog never refresh a different TOC. The caret at the field's own marker (offset 0
+/// of the first entry) and at the end of the last entry belong to the range as well.
+pub fn toc_span(s: &Session) -> Option<(usize, usize)> {
+    toc_range(s).or_else(|| {
+        let r = s.doc.field_ranges(StoryRef::Body).into_iter().find(|r| convertible_toc_range(s, r))?;
+        Some((r.start.path.last(), r.end.path.last()))
     })
 }
 
@@ -248,13 +251,13 @@ fn convertible_toc_range(s: &Session, r: &wordcraft_doc::FieldRange) -> bool {
 
 /// The body has a table of contents Update Table works on.
 pub fn has_toc(s: &Session) -> bool {
-    toc_range(s).is_some()
+    toc_span(s).is_some()
 }
 
 /// The selection reaches into the table of contents (its heading or an entry): Update Field
 /// updates the table then, and Word asks how first.
 pub fn toc_selected(s: &Session) -> bool {
-    let Some((start, end)) = toc_range(s) else { return false };
+    let Some((start, end)) = toc_span(s) else { return false };
     let (a, b) = s.sel.ordered();
     let block = |p: &Pos| (p.story == StoryRef::Body).then(|| p.path.0.first().map_or(0, |i| *i as usize));
     matches!((block(&a), block(&b)), (Some(a), Some(b)) if a <= end && b >= start)
